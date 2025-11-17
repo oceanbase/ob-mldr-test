@@ -61,6 +61,12 @@ def test_simple_insert(lang: str):
     test_count = min(200000, actual_corpus_count)
     print(f"将插入 {test_count} 条记录")
     
+    # 批量插入SQL
+    insert_sql = f"""
+    INSERT INTO {table_name} (base_id, docid_col, fulltext_col)
+    VALUES (%s, %s, %s)
+    """
+    
     # 分批处理以减少内存占用
     batch_size = 1000
     inserted_count = 0
@@ -73,43 +79,58 @@ def test_simple_insert(lang: str):
         batch_docids = [corpus[i]["docid"] for i in batch_indices]
         batch_texts = [corpus[i]["text"] for i in batch_indices]
         
+        # 准备批量插入数据
+        batch_data = []
         for idx, (docid, text) in enumerate(zip(batch_docids, batch_texts)):
             i = batch_start + idx
             try:
-                # 获取数据
                 # 生成base_id 
                 base_group_size = 500
                 base_id_number = (i // base_group_size) + 1
                 base_id = f"base_id_{base_id_number}"
                 
-                insert_sql = f"""
-                INSERT INTO {table_name} (base_id, docid_col, fulltext_col)
-                VALUES (%s, %s, %s)
-                """
-                cursor.execute(insert_sql, (base_id, docid, text))
-                
-                # print(f"成功插入第 {i+1} 条记录")
-                inserted_count += 1
+                # 添加到批量数据列表
+                batch_data.append((base_id, docid, text))
                 
             except Exception as e:
-                print(f"插入第 {i+1} 条记录失败: {e}")
+                print(f"准备第 {i+1} 条记录失败: {e}")
                 import traceback
                 traceback.print_exc()
+                continue
         
-        # 每批次提交一次，减少内存占用
-        conn.commit()
+        # 批量插入当前批次
+        if len(batch_data) > 0:
+            try:
+                cursor.executemany(insert_sql, batch_data)
+                conn.commit()
+                inserted_count += len(batch_data)
+            except Exception as e:
+                print(f"批量插入失败（批次 {batch_start}-{batch_end}）: {e}")
+                import traceback
+                traceback.print_exc()
+                conn.rollback()
         
         # 显式释放批次数据
-        del batch_docids, batch_texts
+        del batch_docids, batch_texts, batch_data
         
         if (batch_start // batch_size + 1) % 10 == 0:
-            print(f"已处理 {batch_end}/{test_count} 条记录")
+            print(f"已处理 {batch_end}/{test_count} 条记录，成功插入 {inserted_count} 条")
     
     # 显式释放语料库数据
+    # HuggingFace Dataset 对象可能包含内部缓存，需要更彻底地清理
+    try:
+        # 如果 Dataset 有清理方法，调用它
+        if hasattr(corpus, 'cleanup_cache_files'):
+            corpus.cleanup_cache_files()
+        if hasattr(corpus, 'reset_format'):
+            corpus.reset_format()
+    except:
+        pass
+    
+    # 删除引用并强制垃圾回收
     del corpus
     import gc
-    gc.collect()
-    
+    gc.collect()    
     
     # 最终提交（虽然每批次已提交，但确保所有数据都已提交）
     conn.commit()
@@ -118,6 +139,12 @@ def test_simple_insert(lang: str):
     cursor.execute(f"SELECT COUNT(*) FROM {table_name}")
     count = cursor.fetchone()[0]
     print(f" 表中总记录数: {count}")
+    
+    # 验证插入数量是否一致
+    if count != inserted_count:
+        print(f"⚠️  警告：数据库中的记录数 ({count}) 与插入计数 ({inserted_count}) 不一致！")
+    else:
+        print(f"✓ 验证通过：数据库记录数与插入计数一致 ({inserted_count} 条)")
     
     # cursor.execute(f"SELECT id, base_id, docid_col, fulltext_col FROM {table_name} LIMIT 5")
     # records = cursor.fetchall()
