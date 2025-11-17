@@ -1,0 +1,7 @@
+FlagEmbedding
+datasets==2.19.0
+pymysql
+pyserini==0.22.0
+blis==0.7.11
+spacy<3.5.0
+faiss-cpu

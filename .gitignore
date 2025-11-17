@@ -1,0 +1,4 @@
+.venv/*
+.hf_cache/*
+__pycache__/*
+query-results/*
