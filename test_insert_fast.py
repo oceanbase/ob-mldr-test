@@ -18,7 +18,11 @@ def test_simple_insert(lang: str):
         'user': 'root',
         'password': '',
         'database': 'test',
-        'charset': 'utf8mb4'
+        'charset': 'utf8mb4',
+        'connect_timeout': 60,  # 连接超时时间（秒）
+        'read_timeout': 600,    # 读取超时时间（秒），批量插入可能需要较长时间
+        'write_timeout': 600,   # 写入超时时间（秒），批量插入可能需要较长时间
+        'autocommit': False     # 手动控制事务提交
     }
     
     # 连接数据库
@@ -46,20 +50,13 @@ def test_simple_insert(lang: str):
     cursor.execute(create_table_sql)
     print("测试表创建成功")
     
-    # 加载语料库 - 使用流式加载以减少内存占用
-    print(f"加载语料库: {lang}")
-    corpus = load_corpus(lang)
+    # 使用流式加载语料库 - 真正逐条处理，不缓存数据
+    print(f"使用流式加载语料库: {lang}")
+    corpus_stream = load_corpus(lang, streaming=True)
     
-    # 先获取总数，然后分批处理
-    try:
-        actual_corpus_count = len(corpus)
-    except:
-        # 如果无法直接获取长度，尝试获取第一条来估算
-        actual_corpus_count = corpus.num_rows if hasattr(corpus, 'num_rows') else 200000
-    
-    # 选择较小的值：实际条数或200000
-    test_count = min(200000, actual_corpus_count)
-    print(f"将插入 {test_count} 条记录")
+    # 选择插入数量
+    test_count = 200000  # 插入200000条用于测试
+    print(f"将插入最多 {test_count} 条记录（流式处理）")
     
     # 批量插入SQL
     insert_sql = f"""
@@ -67,23 +64,26 @@ def test_simple_insert(lang: str):
     VALUES (%s, %s, %s)
     """
     
-    # 分批处理以减少内存占用
-    batch_size = 1000
+    # 流式处理：批量插入，提高性能
+    batch_size = 1000  # 每1000条批量插入一次
     inserted_count = 0
+    processed_count = 0  # 处理的数据条数（包括失败的）
+    failed_batches = []
+    batch_data = []  # 批量数据缓存
+    batch_num = 0
     
-    for batch_start in range(0, test_count, batch_size):
-        batch_end = min(batch_start + batch_size, test_count)
-        batch_indices = list(range(batch_start, batch_end))
-        
-        # 只加载当前批次的数据
-        batch_docids = [corpus[i]["docid"] for i in batch_indices]
-        batch_texts = [corpus[i]["text"] for i in batch_indices]
-        
-        # 准备批量插入数据
-        batch_data = []
-        for idx, (docid, text) in enumerate(zip(batch_docids, batch_texts)):
-            i = batch_start + idx
+    try:
+        for i, data in enumerate(corpus_stream):
+            if i >= test_count:
+                print(f"达到目标数量 {test_count}，停止处理")
+                break
+            
+            processed_count = i + 1
             try:
+                # 从流式数据中获取
+                docid = data["docid"]
+                text = data["text"]
+                
                 # 生成base_id 
                 base_group_size = 500
                 base_id_number = (i // base_group_size) + 1
@@ -92,59 +92,101 @@ def test_simple_insert(lang: str):
                 # 添加到批量数据列表
                 batch_data.append((base_id, docid, text))
                 
+                # 立即释放当前数据引用
+                del data, docid, text, base_id
+                
+                # 达到批次大小时，执行批量插入
+                if len(batch_data) >= batch_size:
+                    batch_num += 1
+                    batch_start = (batch_num - 1) * batch_size
+                    batch_end = min(batch_start + batch_size, processed_count)
+                    
+                    try:
+                        cursor.executemany(insert_sql, batch_data)
+                        conn.commit()
+                        inserted_count += len(batch_data)
+                        
+                        if batch_num % 10 == 0:
+                            print(f"✓ 批次 {batch_num} 插入成功: {len(batch_data) * 10} 条，总进度: {batch_end}/{test_count} ({batch_end*100//test_count}%)")
+                        
+                        # 清空批量数据，释放内存
+                        batch_data.clear()
+                    except Exception as e:
+                        print(f"✗ 批量插入失败（批次 {batch_num}, {batch_start}-{batch_end}）: {e}")
+                        import traceback
+                        traceback.print_exc()
+                        conn.rollback()  # 回滚失败的批次
+                        failed_batches.append((batch_num, batch_start, batch_end, str(e)))
+                        batch_data.clear()  # 清空失败的数据
+                        continue
+                
             except Exception as e:
-                print(f"准备第 {i+1} 条记录失败: {e}")
+                print(f"处理第 {i+1} 条记录失败: {e}")
                 import traceback
                 traceback.print_exc()
                 continue
         
-        # 批量插入当前批次
+        # 插入剩余的数据
         if len(batch_data) > 0:
+            batch_num += 1
+            batch_start = (batch_num - 1) * batch_size
             try:
+                print(f"插入最后一批数据，共 {len(batch_data)} 条")
                 cursor.executemany(insert_sql, batch_data)
                 conn.commit()
                 inserted_count += len(batch_data)
+                batch_data.clear()
+                print(f"✓ 最后一批数据插入成功")
             except Exception as e:
-                print(f"批量插入失败（批次 {batch_start}-{batch_end}）: {e}")
+                print(f"✗ 批量插入剩余数据失败: {e}")
                 import traceback
                 traceback.print_exc()
                 conn.rollback()
+                failed_batches.append((batch_num, batch_start, processed_count, str(e)))
         
-        # 显式释放批次数据
-        del batch_docids, batch_texts, batch_data
+        print(f"处理完成：共处理 {processed_count} 条数据，成功插入 {inserted_count} 条记录")
         
-        if (batch_start // batch_size + 1) % 10 == 0:
-            print(f"已处理 {batch_end}/{test_count} 条记录，成功插入 {inserted_count} 条")
+    finally:
+        # 显式释放流式数据
+        del corpus_stream
+        import gc
+        gc.collect()
     
-    # 显式释放语料库数据
-    # HuggingFace Dataset 对象可能包含内部缓存，需要更彻底地清理
-    try:
-        # 如果 Dataset 有清理方法，调用它
-        if hasattr(corpus, 'cleanup_cache_files'):
-            corpus.cleanup_cache_files()
-        if hasattr(corpus, 'reset_format'):
-            corpus.reset_format()
-    except:
-        pass
+    # 打印失败批次信息
+    if failed_batches:
+        print(f"\n⚠️  共有 {len(failed_batches)} 个批次插入失败:")
+        for batch_num, start, end, error in failed_batches:
+            print(f"  批次 {batch_num} ({start}-{end}): {error}")
     
-    # 删除引用并强制垃圾回收
-    del corpus
-    import gc
-    gc.collect()    
     
     # 最终提交（虽然每批次已提交，但确保所有数据都已提交）
     conn.commit()
     
+    print("\n" + "="*60)
     print("验证插入结果...")
     cursor.execute(f"SELECT COUNT(*) FROM {table_name}")
     count = cursor.fetchone()[0]
     print(f" 表中总记录数: {count}")
+    print(f" 程序计数: {inserted_count} 条")
+    print(f" 处理数量: {processed_count} 条")
+    print(f" 目标数量: {test_count} 条")
     
     # 验证插入数量是否一致
     if count != inserted_count:
-        print(f"⚠️  警告：数据库中的记录数 ({count}) 与插入计数 ({inserted_count}) 不一致！")
+        print(f"\n⚠️  警告：数据库中的记录数 ({count}) 与插入计数 ({inserted_count}) 不一致！")
+        print(f"   差异: {abs(count - inserted_count)} 条")
+        if count < inserted_count:
+            print(f"   可能原因: 进程被中断（如OOM kill），部分数据已提交但计数不准确")
+        else:
+            print(f"   可能原因: 有重复插入或其他异常情况")
     else:
-        print(f"✓ 验证通过：数据库记录数与插入计数一致 ({inserted_count} 条)")
+        print(f"\n✓ 验证通过：数据库记录数与插入计数一致 ({inserted_count} 条)")
+    
+    if count < test_count:
+        print(f"\n⚠️  注意：实际插入 {count} 条，少于目标 {test_count} 条")
+        print(f"   完成度: {count*100//test_count}%")
+        if failed_batches:
+            print(f"   失败批次数: {len(failed_batches)}")
     
     # cursor.execute(f"SELECT id, base_id, docid_col, fulltext_col FROM {table_name} LIMIT 5")
     # records = cursor.fetchall()
@@ -154,13 +196,13 @@ def test_simple_insert(lang: str):
     
     print("创建普通索引...")
     try:
-        cursor.execute(f"CREATE /*+ parallel(90) */ INDEX idx_base_id ON {table_name}(base_id)")
+        cursor.execute(f"CREATE INDEX idx_base_id ON {table_name}(base_id)")
         print("base_id索引创建成功")
     except Exception as e:
         print(f"base_id索引创建失败: {e}")
     
     try:
-        cursor.execute(f"CREATE /*+ parallel(90) */ INDEX idx_docid ON {table_name}(docid_col)")
+        cursor.execute(f"CREATE INDEX idx_docid ON {table_name}(docid_col)")
         print("docid索引创建成功")
     except Exception as e:
         print(f"docid索引创建失败: {e}") 
@@ -168,6 +210,8 @@ def test_simple_insert(lang: str):
     # 2. 创建全文索引
     print("创建全文索引...")
     try:
+        cursor.execute("SET ob_query_timeout = 3600000000")
+        cursor.execute("SET ob_trx_timeout = 864000000")
         cursor.execute(f"CREATE /*+ parallel(90) */ FULLTEXT INDEX ft_fulltext ON {table_name}(fulltext_col)")
         print("全文索引创建成功")
     except Exception as e:

@@ -132,7 +132,10 @@ class OceanBaseClientForSearch:
                 password=self.password,
                 database=self.database,
                 charset='utf8mb4',
-                autocommit=True
+                autocommit=True,
+                connect_timeout=60,  # 连接超时时间（秒）
+                read_timeout=300,    # 读取超时时间（秒），查询可能需要较长时间
+                write_timeout=300    # 写入超时时间（秒），查询可能需要较长时间
             )
             print(f"成功连接到OceanBase数据库: {self.host}:{self.port}")
             # 设置系统配置项

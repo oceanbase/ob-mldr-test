@@ -86,16 +86,21 @@ def check_query_types(query_types):
     return query_types
 
 
-def load_corpus(lang: str):
+def load_corpus(lang: str, streaming: bool = False):
     # 使用本地MLDR.py脚本加载数据
     try:
         from load_mldr_local import load_corpus_local
-        return load_corpus_local(lang)
+        return load_corpus_local(lang, streaming=streaming)
     except ImportError:
         # 如果本地模块不存在，回退到原始方法
         print("本地MLDR模块不存在，使用远程加载...")
-        corpus = datasets.load_dataset('Shitao/MLDR', f'corpus-{lang}', split='corpus',
-                                       download_config=datasets.DownloadConfig(resume_download=True))
+        if streaming:
+            corpus = datasets.load_dataset('Shitao/MLDR', f'corpus-{lang}', split='corpus',
+                                          streaming=streaming,
+                                          trust_remote_code=True)
+        else:
+            corpus = datasets.load_dataset('Shitao/MLDR', f'corpus-{lang}', split='corpus',
+                                           download_config=datasets.DownloadConfig(resume_download=True))
         return corpus
 
 

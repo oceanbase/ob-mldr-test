@@ -21,7 +21,7 @@ sys.path.insert(0, current_dir)
 # 定义可用的语言列表
 available_languages = ['ar', 'de', 'en', 'es', 'fr', 'hi', 'it', 'ja', 'ko', 'pt', 'ru', 'th', 'zh']
 
-def load_corpus_local(lang: str):
+def load_corpus_local(lang: str, streaming: bool = False):
     """使用本地MLDR.py加载语料库"""
     # 获取缓存目录
     custom_cache_dir = get_cache_dir()
@@ -46,22 +46,36 @@ def load_corpus_local(lang: str):
         
         if os.path.exists(script_path):
             # 使用本地脚本加载
-            corpus = load_dataset(
-                script_path,  # 本地脚本路径
-                f'corpus-{lang}',  # 配置名称
-                split='corpus',
-                download_config=download_config,
-                trust_remote_code=True
-            )
-            print(f"使用本地MLDR.py成功加载语料库: {lang}")
+            if streaming:
+                corpus = load_dataset(
+                    script_path,  # 本地脚本路径
+                    f'corpus-{lang}',  # 配置名称
+                    split='corpus',
+                    streaming=streaming,
+                    trust_remote_code=True
+                )
+            else:
+                corpus = load_dataset(
+                    script_path,  # 本地脚本路径
+                    f'corpus-{lang}',  # 配置名称
+                    split='corpus',
+                    download_config=download_config,
+                    trust_remote_code=True
+                )
+            print(f"使用本地MLDR.py成功加载语料库: {lang} (streaming={streaming})")
             return corpus
         else:
            
             print(f" 本地MLDR.py脚本不存在: {script_path}")
             print("回退到远程加载...")
-            corpus = load_dataset('Shitao/MLDR', f'corpus-{lang}', split='corpus',
-                                 download_config=download_config,
-                                 trust_remote_code=True)
+            if streaming:
+                corpus = load_dataset('Shitao/MLDR', f'corpus-{lang}', split='corpus',
+                                     streaming=streaming,
+                                     trust_remote_code=True)
+            else:
+                corpus = load_dataset('Shitao/MLDR', f'corpus-{lang}', split='corpus',
+                                     download_config=download_config,
+                                     trust_remote_code=True)
             return corpus
             
     except Exception as e:
