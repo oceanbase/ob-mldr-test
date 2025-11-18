@@ -4,9 +4,8 @@
 ## 环境说明
 
 1. python版本建议在3.11及以上，不低于3.9
-2. pip install datasets==2.19.0
-3. 测试会自动下载 mldr 语料数据集，并在本地进行缓存
-4. java 版本建议不低于 11
+2. 测试会自动下载 mldr 语料数据集，并在本地进行缓存
+3. java 版本建议不低于 11
 
 ## 安装 OpenJDK 11
 
@@ -14,6 +13,17 @@
 sudo dnf install java-11-openjdk-devel -y
 export JAVA_HOME=/usr/lib/jvm/java-11-openjdk-11.0.22.0.7-0.al8.x86_64
 export JVM_PATH=$JAVA_HOME/lib/server/libjvm.so
+```
+
+## 安装依赖
+
+```bash
+# 启用虚拟环境
+python3 -m venv .venv
+source .venv/bin/activate
+
+pip install --upgrade pip
+pip install -r requirements.txt
 ```
 
 ## 使用方法
@@ -79,7 +89,7 @@ python3 evaluate_results_oceanbase.py --languages en \
 
 ### 一体化运行（推荐）
 
-如果需要一次预热+三组查询并自动计算平均值，可以使用一体化测试：
+如果需要一次预热 + 三组查询并自动计算平均值，可以使用一体化测试：
 
 ```bash
 python3 mldr_data_test.py --lang en --query_types bm25
