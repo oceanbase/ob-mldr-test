@@ -12,7 +12,7 @@ from datasets import load_dataset, DownloadConfig
 from hf_cache_config import setup_hf_cache, get_cache_dir
 
 # 设置Hugging Face缓存
-setup_hf_cache()
+# setup_hf_cache()
 
 # 添加当前目录到Python路径，以便导入MLDR.py
 current_dir = os.path.dirname(os.path.abspath(__file__))

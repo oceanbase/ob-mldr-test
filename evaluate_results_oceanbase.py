@@ -10,7 +10,7 @@ import os
 from hf_cache_config import setup_hf_cache, get_cache_dir
 
 # 设置Hugging Face缓存
-setup_hf_cache()
+# setup_hf_cache()
 
 import platform
 import subprocess
@@ -21,11 +21,11 @@ from pyserini.util import download_evaluation_script
 from mldr_common_tools import check_languages
 
 
-def setup_mirror():
-    """设置HF-Mirror镜像站和缓存"""
-    setup_hf_cache()
+# def setup_mirror():
+#     """设置HF-Mirror镜像站和缓存"""
+#     setup_hf_cache()
 
-setup_mirror()
+# setup_mirror()
 
 
 @dataclass

@@ -18,7 +18,7 @@ import os
 from hf_cache_config import setup_hf_cache, get_cache_dir
 
 # 设置Hugging Face缓存
-setup_hf_cache()
+# setup_hf_cache()
 
 from itertools import chain, combinations
 import time
@@ -35,11 +35,11 @@ from mldr_common_tools import query_yields, apply_funcs, get_colbert_model, save
 from transformers import HfArgumentParser
 
 
-def setup_mirror():
-    """设置HF-Mirror镜像站和缓存"""
-    setup_hf_cache()
+# def setup_mirror():
+#     """设置HF-Mirror镜像站和缓存"""
+#     setup_hf_cache()
 
-setup_mirror()
+# setup_mirror()
 
 
 @dataclass

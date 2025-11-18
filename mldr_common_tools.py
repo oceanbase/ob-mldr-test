@@ -4,7 +4,7 @@ import os
 from hf_cache_config import setup_hf_cache, get_cache_dir
 
 # 设置Hugging Face缓存
-setup_hf_cache()
+# setup_hf_cache()
 
 import json
 import struct
@@ -15,12 +15,12 @@ from dataclasses import dataclass, field
 from pyserini.output_writer import get_output_writer, OutputFormat
 # from infinity.common import SparseVector
 
-def setup_mirror():
-    """设置HF-Mirror镜像站和缓存"""
-    setup_hf_cache()
+# def setup_mirror():
+#     """设置HF-Mirror镜像站和缓存"""
+#     setup_hf_cache()
 
 
-setup_mirror()
+# setup_mirror()
 
 @dataclass
 class EvalArgs:
