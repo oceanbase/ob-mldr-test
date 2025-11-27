@@ -13,6 +13,9 @@ import logging
 import tempfile
 import platform
 import subprocess
+import io
+import re
+from contextlib import redirect_stdout
 from typing import Tuple, Optional
 
 # 导入其他模块的功能
@@ -97,14 +100,25 @@ class MLDRDataTest:
             # 创建模型参数
             model_args = ModelArgs()
             
-            # 执行搜索
+            # 执行搜索（捕获输出以提取查询时间）
             query_types_list = [self.query_types] if isinstance(self.query_types, str) else self.query_types
-            oceanbase_client.main(
-                languages=[self.lang],
-                query_types=query_types_list,
-                model_args=model_args,
-                save_dir=self.query_result_dir
-            )
+            output_buffer = io.StringIO()
+            
+            with redirect_stdout(output_buffer):
+                oceanbase_client.main(
+                    languages=[self.lang],
+                    query_types=query_types_list,
+                    model_args=model_args,
+                    save_dir=self.query_result_dir
+                )
+            
+            # 获取输出内容
+            search_output = output_buffer.getvalue()
+            # 同时打印到日志
+            logger.info("Search output:")
+            for line in search_output.split('\n'):
+                if line.strip():
+                    logger.info(line)
             
             # 关闭连接
             if oceanbase_client.connection:
@@ -115,26 +129,50 @@ class MLDRDataTest:
             import gc
             gc.collect()
             
-            # 从结果文件中统计查询数
-            expected_file = os.path.join(self.query_result_dir, f"{self.lang}_{self.query_types}.txt")
+            # 从输出中提取平均查询时间和查询总数
+            avg_query_time_ms = 0.0
             total_queries = 0
-            if os.path.exists(expected_file):
-                try:
-                    with open(expected_file, 'r') as f:
-                        lines = f.readlines()
-                        # TREC 格式，每行一个查询结果，通过查询ID判断查询数
-                        query_ids = set()
-                        for line in lines:
-                            parts = line.strip().split()
-                            if len(parts) >= 1:
-                                query_ids.add(parts[0])
-                        total_queries = len(query_ids)
-                        logger.info(f'Found total queries from result file: {total_queries}')
-                except Exception as e:
-                    logger.warning(f'Failed to count queries from result file: {e}')
+            
+            # 提取平均查询时间
+            avg_time_pattern = r'平均查询时间[：:]\s*(\d+\.?\d*)\s*ms'
+            match = re.search(avg_time_pattern, search_output)
+            if match:
+                avg_query_time_ms = float(match.group(1))
+                logger.info(f'Extracted average query time: {avg_query_time_ms} ms')
+            
+            # 提取查询总数
+            query_total_pattern = r'查询总数[：:]\s*(\d+)'
+            match = re.search(query_total_pattern, search_output)
+            if match:
+                total_queries = int(match.group(1))
+                logger.info(f'Extracted total queries: {total_queries}')
+            
+            # 如果无法从输出中提取，从结果文件中统计查询数
+            if total_queries == 0:
+                expected_file = os.path.join(self.query_result_dir, f"{self.lang}_{self.query_types}.txt")
+                if os.path.exists(expected_file):
+                    try:
+                        with open(expected_file, 'r') as f:
+                            lines = f.readlines()
+                            # TREC 格式，每行一个查询结果，通过查询ID判断查询数
+                            query_ids = set()
+                            for line in lines:
+                                parts = line.strip().split()
+                                if len(parts) >= 1:
+                                    query_ids.add(parts[0])
+                            total_queries = len(query_ids)
+                            logger.info(f'Found total queries from result file: {total_queries}')
+                    except Exception as e:
+                        logger.warning(f'Failed to count queries from result file: {e}')
+            
+            # 计算总查询时间（秒）
+            total_query_time = 0.0
+            if avg_query_time_ms > 0 and total_queries > 0:
+                total_query_time = (avg_query_time_ms / 1000.0) * total_queries
+                logger.info(f'Calculated total query time: {total_query_time:.2f}s (from avg {avg_query_time_ms:.2f}ms × {total_queries} queries)')
             
             logger.info("✓ Search complete")
-            return 0.0, total_queries
+            return total_query_time, total_queries
             
         except Exception as e:
             error_msg = f"step2 search failed: {str(e)}"
@@ -303,7 +341,6 @@ class MLDRDataTest:
                     logger.warning(f"Failed to clean result file: {e}")
         
         # 执行搜索
-        search_start_time = time.time()
         try:
             logger.info(f"开始搜索: lang={self.lang}, query_types={self.query_types}")
             
@@ -313,14 +350,25 @@ class MLDRDataTest:
             # 创建模型参数
             model_args = ModelArgs()
             
-            # 执行搜索
+            # 执行搜索（捕获输出以提取查询时间）
             query_types_list = [self.query_types] if isinstance(self.query_types, str) else self.query_types
-            oceanbase_client.main(
-                languages=[self.lang],
-                query_types=query_types_list,
-                model_args=model_args,
-                save_dir=self.query_result_dir
-            )
+            output_buffer = io.StringIO()
+            
+            with redirect_stdout(output_buffer):
+                oceanbase_client.main(
+                    languages=[self.lang],
+                    query_types=query_types_list,
+                    model_args=model_args,
+                    save_dir=self.query_result_dir
+                )
+            
+            # 获取输出内容
+            search_output = output_buffer.getvalue()
+            # 同时打印到日志
+            logger.info("Search output:")
+            for line in search_output.split('\n'):
+                if line.strip():
+                    logger.info(line)
             
             # 关闭连接
             if oceanbase_client.connection:
@@ -331,34 +379,49 @@ class MLDRDataTest:
             import gc
             gc.collect()
             
-            search_end_time = time.time()
-            search_duration = search_end_time - search_start_time
-            
-            # 从结果文件中统计查询数并计算QPS
-            expected_file = os.path.join(self.query_result_dir, f"{self.lang}_{self.query_types}.txt")
+            # 从输出中提取平均查询时间和查询总数
+            avg_query_time_ms = 0.0
             total_queries = 0
-            if os.path.exists(expected_file):
-                try:
-                    with open(expected_file, 'r') as f:
-                        lines = f.readlines()
-                        # TREC 格式，每行一个查询结果，通过查询ID判断查询数
-                        query_ids = set()
-                        for line in lines:
-                            parts = line.strip().split()
-                            if len(parts) >= 1:
-                                query_ids.add(parts[0])
-                        total_queries = len(query_ids)
-                        logger.info(f'Found total queries from result file: {total_queries}')
-                except Exception as e:
-                    logger.warning(f'Failed to count queries from result file: {e}')
             
-            # 计算 QPS
-            if total_queries > 0 and search_duration > 0:
-                qps = total_queries / search_duration
-                logger.info(f"Search QPS: {qps:.2f}, total queries: {total_queries}, duration: {search_duration:.2f}s")
+            # 提取平均查询时间
+            avg_time_pattern = r'平均查询时间[：:]\s*(\d+\.?\d*)\s*ms'
+            match = re.search(avg_time_pattern, search_output)
+            if match:
+                avg_query_time_ms = float(match.group(1))
+                logger.info(f'Extracted average query time: {avg_query_time_ms} ms')
+            
+            # 提取查询总数
+            query_total_pattern = r'查询总数[：:]\s*(\d+)'
+            match = re.search(query_total_pattern, search_output)
+            if match:
+                total_queries = int(match.group(1))
+                logger.info(f'Extracted total queries: {total_queries}')
+            
+            # 如果无法从输出中提取，从结果文件中统计查询数
+            if total_queries == 0:
+                expected_file = os.path.join(self.query_result_dir, f"{self.lang}_{self.query_types}.txt")
+                if os.path.exists(expected_file):
+                    try:
+                        with open(expected_file, 'r') as f:
+                            lines = f.readlines()
+                            # TREC 格式，每行一个查询结果，通过查询ID判断查询数
+                            query_ids = set()
+                            for line in lines:
+                                parts = line.strip().split()
+                                if len(parts) >= 1:
+                                    query_ids.add(parts[0])
+                            total_queries = len(query_ids)
+                            logger.info(f'Found total queries from result file: {total_queries}')
+                    except Exception as e:
+                        logger.warning(f'Failed to count queries from result file: {e}')
+            
+            # 计算 QPS：QPS = 1000 / 平均查询时间(ms)
+            if avg_query_time_ms > 0:
+                qps = 1000.0 / avg_query_time_ms
+                logger.info(f"Search QPS: {qps:.2f} (1000 / {avg_query_time_ms:.2f}ms)")
             else:
                 qps = 0.0
-                logger.warning(f"Cannot calculate QPS: total_queries={total_queries}, duration={search_duration:.2f}s")
+                logger.warning(f"Cannot calculate QPS: average query time not found in output")
             
         except Exception as e:
             error_msg = f"search failed: {str(e)}"
