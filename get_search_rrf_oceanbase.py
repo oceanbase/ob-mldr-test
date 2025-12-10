@@ -203,7 +203,7 @@ class OceanBaseClientForSearch:
                 return docid_list, score_list
         except Exception as e:
             print(f"BM25查询失败: {e}")
-            return [], []
+            raise RuntimeError(f"BM25查询失败: {e}") from e
 
     def _analyze_query_tokenization(self, query_text, table_name):
         """分析查询文本的分词结果"""
@@ -291,7 +291,7 @@ class OceanBaseClientForSearch:
                 return docid_list, score_list
         except Exception as e:
             print(f"密集向量查询失败: {e}")
-            return [], []
+            raise RuntimeError(f"密集向量查询失败: {e}") from e
 
     def _sparse_query(self, table_name: str, query_target, max_hits: int):
         """稀疏向量相似度查询"""
@@ -324,7 +324,7 @@ class OceanBaseClientForSearch:
                 return docid_list, score_list
         except Exception as e:
             print(f"稀疏向量查询失败: {e}")
-            return [], []
+            raise RuntimeError(f"稀疏向量查询失败: {e}") from e
 
     def _colbert_query(self, table_name: str, query_target, max_hits: int):
         """ColBERT查询（如果支持）"""
@@ -353,7 +353,7 @@ class OceanBaseClientForSearch:
                 return docid_list, score_list
         except Exception as e:
             print(f"ColBERT查询失败: {e}")
-            return [], []
+            raise RuntimeError(f"ColBERT查询失败: {e}") from e
 
     def fusion_query(self, query_targets_list: list, apply_funcs_list: list, max_hits: int):
         """融合查询 - 使用RRF (Reciprocal Rank Fusion)"""
@@ -505,14 +505,18 @@ class OceanBaseClientForSearch:
                         query_target_dict['language'] = lang
                     
                     time_start = time.time()
-                    docid_list, score_list = self.common_single_query_func(query_type, query_target_dict, max_hits=10)
-                    time_end = time.time()
-                    total_query_time += time_end - time_start
-                    
-                    result = []
-                    for docid, score in zip(docid_list, score_list):
-                        result.append(FakeJScoredDoc(docid, score))
-                    result_list.append((qid, result))
+                    try:
+                        docid_list, score_list = self.common_single_query_func(query_type, query_target_dict, max_hits=10)
+                        time_end = time.time()
+                        total_query_time += time_end - time_start
+                        
+                        result = []
+                        for docid, score in zip(docid_list, score_list):
+                            result.append(FakeJScoredDoc(docid, score))
+                        result_list.append((qid, result))
+                    except Exception as e:
+                        # 查询失败时抛出异常，不再继续
+                        raise RuntimeError(f"查询失败 (query_id={qid}, query_type={query_type}): {e}") from e
                 
                 print(f"平均查询时间: {1000.0 * total_query_time / float(total_query_num)} ms.")
                 save_path = os.path.join(save_dir, f"{lang}_{query_type}.txt")
@@ -568,26 +572,30 @@ class OceanBaseClientForSearch:
                         query_targets_list.append(query_target_dict)
                     
                     time_start = time.time()
-                    # 根据融合方法选择不同的融合策略
-                    if hasattr(self, 'fusion_method') and self.fusion_method == 'weighted':
-                        # 解析权重
-                        weights = None
-                        if hasattr(self, 'weights') and self.weights:
-                            weights = [float(w.strip()) for w in self.weights.split(',')]
-                        docid_list, score_list = self.fusion_query_with_scores(
-                            query_targets_list, apply_funcs_list, max_hits=10, 
-                            fusion_method='weighted', weights=weights
-                        )
-                    else:
-                        # 默认使用RRF
-                        docid_list, score_list = self.fusion_query(query_targets_list, apply_funcs_list, max_hits=10)
-                    time_end = time.time()
-                    total_query_time += time_end - time_start
-                    
-                    result = []
-                    for docid, score in zip(docid_list, score_list):
-                        result.append(FakeJScoredDoc(docid, score))
-                    result_list.append((qid, result))
+                    try:
+                        # 根据融合方法选择不同的融合策略
+                        if hasattr(self, 'fusion_method') and self.fusion_method == 'weighted':
+                            # 解析权重
+                            weights = None
+                            if hasattr(self, 'weights') and self.weights:
+                                weights = [float(w.strip()) for w in self.weights.split(',')]
+                            docid_list, score_list = self.fusion_query_with_scores(
+                                query_targets_list, apply_funcs_list, max_hits=10, 
+                                fusion_method='weighted', weights=weights
+                            )
+                        else:
+                            # 默认使用RRF
+                            docid_list, score_list = self.fusion_query(query_targets_list, apply_funcs_list, max_hits=10)
+                        time_end = time.time()
+                        total_query_time += time_end - time_start
+                        
+                        result = []
+                        for docid, score in zip(docid_list, score_list):
+                            result.append(FakeJScoredDoc(docid, score))
+                        result_list.append((qid, result))
+                    except Exception as e:
+                        # 融合查询失败时抛出异常，不再继续
+                        raise RuntimeError(f"融合查询失败 (query_id={qid}, query_types={query_type_comb_str}): {e}") from e
                 
                 print(f"平均查询时间: {1000.0 * total_query_time / float(total_query_num)} ms.")
                 save_path = os.path.join(save_dir, f"{lang}_fusion_{query_type_comb_str}.txt")

@@ -23,6 +23,7 @@ from test_insert_fast import test_simple_insert
 from get_search_rrf_oceanbase import OceanBaseClientForSearch, ModelArgs
 from evaluate_results_oceanbase import evaluate, check_qrels_files, map_metric
 from pyserini.util import download_evaluation_script
+from memory_limit_helper import MemoryLimitHelper
 
 # 设置日志
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -37,7 +38,9 @@ class MLDRDataTest:
                  lang: str = 'en',
                  query_types: str = 'bm25',
                  db_port: int = 2881,
-                 query_result_dir: Optional[str] = None):
+                 query_result_dir: Optional[str] = None,
+                 enable_memory_monitor: bool = True,
+                 memory_limit_mb: int = 11264):
         """
         初始化 MLDR 测试
         
@@ -47,6 +50,8 @@ class MLDRDataTest:
             query_types: 查询类型，默认 'bm25'
             db_port: 数据库端口，默认 2881
             query_result_dir: 查询结果保存目录，如果为 None 则使用临时目录
+            enable_memory_monitor: 是否启用内存监控，默认 True
+            memory_limit_mb: 内存限制（MB），默认 11GB (11264 MB)，超过此限制会触发 OOM kill
         """
         self.mldr_data_test_dir = mldr_data_test_dir
         self.lang = lang
@@ -64,8 +69,17 @@ class MLDRDataTest:
         self.total_time: float = 0.0
         self.all_runs_passed: bool = False  # 是否所有测试都达到阈值
         
+        # 内存监控
+        self.enable_memory_monitor = enable_memory_monitor
+        self.memory_limit_mb = memory_limit_mb
+        self.memory_helper: Optional[MemoryLimitHelper] = None
+        self.oom_detected = False
+        self.oom_info: Optional[str] = None
+        
         logger.info(f'MLDRDataTest initialized: lang={lang}, query_types={query_types}, db_port={db_port}')
         logger.info(f'Query result directory: {self.query_result_dir}')
+        if self.enable_memory_monitor:
+            logger.info(f'Memory monitoring enabled: limit={memory_limit_mb} MB')
     
     def step1_insert_data(self) -> bool:
         """
@@ -77,12 +91,21 @@ class MLDRDataTest:
         try:
             logger.info(f"开始插入数据: lang={self.lang}")
             test_simple_insert(self.lang)
+            
+            # 插入完成后检查内存状态
+            if self.enable_memory_monitor:
+                oom_detected, oom_info = self._check_memory_status(silent=True)
+                if oom_detected:
+                    raise RuntimeError(f"Memory limit exceeded during data insertion: {oom_info}")
+            
             logger.info("✓ Data insertion and index creation complete")
             return True
+        except RuntimeError:
+            # RuntimeError 直接抛出（包括 OOM 错误）
+            raise
         except Exception as e:
-            error_msg = f"step1 insert data failed: {str(e)}"
-            logger.error(error_msg)
-            raise RuntimeError(error_msg) from e
+            # 其他异常统一处理
+            raise self._handle_exception_with_oom_check(e, "Data insertion")
     
     def step2_search(self) -> Tuple[float, int]:
         """
@@ -172,12 +195,21 @@ class MLDRDataTest:
                 logger.info(f'Calculated total query time: {total_query_time:.2f}s (from avg {avg_query_time_ms:.2f}ms × {total_queries} queries)')
             
             logger.info("✓ Search complete")
+            
+            # 搜索后检查内存状态
+            if self.enable_memory_monitor:
+                oom_detected, oom_info = self._check_memory_status(silent=True)
+                if oom_detected:
+                    raise RuntimeError(f"Memory limit exceeded during search: {oom_info}")
+            
             return total_query_time, total_queries
             
+        except RuntimeError:
+            # RuntimeError 直接抛出（包括 OOM 错误）
+            raise
         except Exception as e:
-            error_msg = f"step2 search failed: {str(e)}"
-            logger.error(error_msg)
-            raise RuntimeError(error_msg) from e
+            # 其他异常统一处理
+            self._handle_exception_with_oom_check(e, "Search")
     
     def step3_evaluate(self) -> float:
         """
@@ -234,12 +266,119 @@ class MLDRDataTest:
                 raise RuntimeError(error_msg)
             
             logger.info(f"✓ Evaluation complete: recall@10={recall_at_10:.4f}")
+            
+            # 评估后检查内存状态
+            if self.enable_memory_monitor:
+                oom_detected, oom_info = self._check_memory_status(silent=True)
+                if oom_detected:
+                    raise RuntimeError(f"Memory limit exceeded during evaluation: {oom_info}")
+            
             return recall_at_10
             
+        except RuntimeError:
+            # RuntimeError 直接抛出（包括 OOM 错误）
+            raise
         except Exception as e:
-            error_msg = f"step3 evaluate failed: {str(e)}"
-            logger.error(error_msg)
-            raise RuntimeError(error_msg) from e
+            # 其他异常统一处理
+            raise self._handle_exception_with_oom_check(e, "Evaluation")
+    
+    def _setup_memory_monitor(self) -> bool:
+        """
+        设置内存监控
+        
+        Returns:
+            bool: 是否成功
+        """
+        if not self.enable_memory_monitor:
+            return True
+        
+        try:
+            self.memory_helper = MemoryLimitHelper(
+                cgroup_name='observer_limit',
+                memory_limit_mb=self.memory_limit_mb
+            )
+            self._cleanup_memory_monitor()
+            
+            if self.memory_helper.apply_limit_to_observer():
+                logger.info(f"✓ Memory limit set to {self.memory_limit_mb} MB ({self.memory_limit_mb/1024:.1f} GB) for observer processes")
+                logger.info(f"  Observer will be killed if memory usage exceeds this limit")
+                # 验证一下是否真的应用成功
+                pids = self.memory_helper.find_observer_pids()
+                if pids:
+                    logger.info(f"  Found {len(pids)} observer process(es): {pids}")
+                    logger.info(f"  Monitoring these processes for OOM...")
+                return True
+            else:
+                logger.warning("Failed to set memory limit, continuing without memory monitoring")
+                return False
+        except Exception as e:
+            logger.warning(f"Failed to setup memory monitor: {e}, continuing without memory monitoring")
+            return False
+    
+    def _check_memory_status(self, silent: bool = False) -> Tuple[bool, Optional[str]]:
+        """
+        检查内存状态和 OOM
+        
+        Args:
+            silent: 如果为 True，不打印日志（避免重复输出）
+        
+        Returns:
+            Tuple[bool, Optional[str]]: (是否发生 OOM, OOM 信息)
+        """
+        if not self.enable_memory_monitor or not self.memory_helper:
+            return False, None
+        
+        try:
+            # 先检查 observer 进程是否还存在
+            pids = self.memory_helper.find_observer_pids()
+            if not pids:
+                if not silent:
+                    logger.warning("⚠ Observer processes not found - may have been OOM killed")
+                self.oom_detected = True
+                self.oom_info = "Observer processes disappeared (possibly OOM killed due to memory limit exceeded)"
+                return True, self.oom_info
+            
+            # 检查 OOM
+            oom_detected, oom_info = self.memory_helper.check_oom()
+            if oom_detected:
+                self.oom_detected = True
+                self.oom_info = oom_info
+                if not silent:
+                    logger.error(f"⚠ OOM detected: {oom_info}")
+            return oom_detected, oom_info
+        except Exception as e:
+            if not silent:
+                logger.warning(f"Failed to check memory status: {e}")
+            return False, None
+    
+    def _handle_exception_with_oom_check(self, e: Exception, step_name: str) -> None:
+        """
+        统一处理异常：检查是否是 OOM，并抛出包装后的异常
+        
+        Args:
+            e: 原始异常
+            step_name: 步骤名称（如 "data insertion", "search", "evaluation"）
+        
+        Raises:
+            RuntimeError: 包装后的异常
+        """
+        # 检查是否是 OOM 导致的
+        if self.enable_memory_monitor:
+            oom_detected, oom_info = self._check_memory_status(silent=True)
+            if oom_detected:
+                raise RuntimeError(f"Memory limit exceeded during {step_name}: {oom_info}") from e
+        
+        # 如果不是 OOM，包装原始错误（不打印，顶层会统一打印）
+        raise RuntimeError(f"{step_name} failed: {str(e)}") from e
+    
+    def _cleanup_memory_monitor(self):
+        """清理内存监控"""
+        if self.memory_helper:
+            try:
+                self.memory_helper.cleanup()
+                logger.info("✓ Memory monitor cleaned up")
+            except Exception as e:
+                logger.warning(f"Failed to cleanup memory monitor: {e}")
     
     def run_all(self) -> Tuple[float, float]:
         """
@@ -255,6 +394,10 @@ class MLDRDataTest:
         logger.info("=" * 60)
         
         try:
+            # 设置内存监控
+            if self.enable_memory_monitor:
+                self._setup_memory_monitor()
+            
             # 步骤1: 插入数据
             self.step1_insert_data()
             
@@ -314,11 +457,16 @@ class MLDRDataTest:
             
             return self.recall_at_10, self.qps
             
+        except RuntimeError as e:
+            # RuntimeError 直接抛出（包括各步骤的 OOM 错误）
+            # 错误信息已经包含了步骤名称，所以直接抛出即可
+            raise
         except Exception as e:
-            logger.error(f"MLDR data test failed: {e}")
+            # 其他未预期的异常
+            logger.error(f"MLDR data test failed with unexpected error: {e}")
             import traceback
             logger.error(traceback.format_exc())
-            raise
+            raise RuntimeError(f"Unexpected error during test execution: {e}") from e
     
     def _run_single_search_and_eval(self, warmup: bool = False) -> Tuple[float, float]:
         """
@@ -379,9 +527,8 @@ class MLDRDataTest:
             import gc
             gc.collect()
             
-            # 从输出中提取平均查询时间和查询总数
+            # 从输出中提取平均查询时间
             avg_query_time_ms = 0.0
-            total_queries = 0
             
             # 提取平均查询时间
             avg_time_pattern = r'平均查询时间[：:]\s*(\d+\.?\d*)\s*ms'
@@ -389,32 +536,7 @@ class MLDRDataTest:
             if match:
                 avg_query_time_ms = float(match.group(1))
                 logger.info(f'Extracted average query time: {avg_query_time_ms} ms')
-            
-            # 提取查询总数
-            query_total_pattern = r'查询总数[：:]\s*(\d+)'
-            match = re.search(query_total_pattern, search_output)
-            if match:
-                total_queries = int(match.group(1))
-                logger.info(f'Extracted total queries: {total_queries}')
-            
-            # 如果无法从输出中提取，从结果文件中统计查询数
-            if total_queries == 0:
-                expected_file = os.path.join(self.query_result_dir, f"{self.lang}_{self.query_types}.txt")
-                if os.path.exists(expected_file):
-                    try:
-                        with open(expected_file, 'r') as f:
-                            lines = f.readlines()
-                            # TREC 格式，每行一个查询结果，通过查询ID判断查询数
-                            query_ids = set()
-                            for line in lines:
-                                parts = line.strip().split()
-                                if len(parts) >= 1:
-                                    query_ids.add(parts[0])
-                            total_queries = len(query_ids)
-                            logger.info(f'Found total queries from result file: {total_queries}')
-                    except Exception as e:
-                        logger.warning(f'Failed to count queries from result file: {e}')
-            
+           
             # 计算 QPS：QPS = 1000 / 平均查询时间(ms)
             if avg_query_time_ms > 0:
                 qps = 1000.0 / avg_query_time_ms
@@ -432,6 +554,12 @@ class MLDRDataTest:
         recall_at_10 = self.step3_evaluate()
         logger.info(f"Evaluation recall@10: {recall_at_10:.4f}")
         
+        # 搜索和评估完成后检查内存状态（静默模式，避免重复输出）
+        if self.enable_memory_monitor:
+            oom_detected, oom_info = self._check_memory_status(silent=True)
+            if oom_detected:
+                raise RuntimeError(f"Memory limit exceeded during search and evaluation: {oom_info}")
+        
         return recall_at_10, qps
 
 
@@ -447,6 +575,12 @@ if __name__ == "__main__":
                        help='数据库端口，默认 2881')
     parser.add_argument('--query_result_dir', type=str, default=None,
                        help='查询结果保存目录，如果为 None 则使用临时目录')
+    parser.add_argument('--enable-memory-monitor', action='store_true', default=True,
+                       help='启用内存监控（默认启用）')
+    parser.add_argument('--disable-memory-monitor', action='store_false', dest='enable_memory_monitor',
+                       help='禁用内存监控')
+    parser.add_argument('--memory-limit-mb', type=int, default=11264,
+                       help='内存限制（MB），默认 11GB (11264 MB)，超过此限制会触发 OOM kill')
     
     args = parser.parse_args()
     
@@ -459,7 +593,9 @@ if __name__ == "__main__":
         lang=args.lang,
         query_types=args.query_types,
         db_port=args.db_port,
-        query_result_dir=args.query_result_dir
+        query_result_dir=args.query_result_dir,
+        enable_memory_monitor=args.enable_memory_monitor,
+        memory_limit_mb=args.memory_limit_mb
     )
     
     # 运行测试
@@ -469,7 +605,13 @@ if __name__ == "__main__":
         print(f"最终结果:")
         print(f"  recall@10: {recall:.4f}")
         print(f"  QPS: {qps:.2f}")
+        if test.oom_detected:
+            print(f"  ⚠ OOM: {test.oom_info}")
         print(f"{'='*60}")
+        
+        # 如果发生 OOM，返回非零退出码
+        if test.oom_detected:
+            sys.exit(1)
     except Exception as e:
         logger.error(f"测试失败: {e}")
         import traceback

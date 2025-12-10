@@ -19,9 +19,9 @@ def test_simple_insert(lang: str):
         'password': '',
         'database': 'test',
         'charset': 'utf8mb4',
-        'connect_timeout': 60,  # 连接超时时间（秒）
-        'read_timeout': 600,    # 读取超时时间（秒），批量插入可能需要较长时间
-        'write_timeout': 600,   # 写入超时时间（秒），批量插入可能需要较长时间
+        'connect_timeout': 300,  # 连接超时时间（秒）
+        'read_timeout': 1800,    # 读取超时时间（秒），批量插入可能需要较长时间
+        'write_timeout': 1800,   # 写入超时时间（秒），批量插入可能需要较长时间
         'autocommit': False     # 手动控制事务提交
     }
     
@@ -68,7 +68,6 @@ def test_simple_insert(lang: str):
     batch_size = 1000  # 每1000条批量插入一次
     inserted_count = 0
     processed_count = 0  # 处理的数据条数（包括失败的）
-    failed_batches = []
     batch_data = []  # 批量数据缓存
     batch_num = 0
     
@@ -116,15 +115,16 @@ def test_simple_insert(lang: str):
                         import traceback
                         traceback.print_exc()
                         conn.rollback()  # 回滚失败的批次
-                        failed_batches.append((batch_num, batch_start, batch_end, str(e)))
                         batch_data.clear()  # 清空失败的数据
-                        continue
+                        # 失败时直接抛出异常，不再继续
+                        raise RuntimeError(f"批量插入失败（批次 {batch_num}, {batch_start}-{batch_end}）: {e}") from e
                 
             except Exception as e:
                 print(f"处理第 {i+1} 条记录失败: {e}")
                 import traceback
                 traceback.print_exc()
-                continue
+                # 失败时直接抛出异常，不再继续
+                raise RuntimeError(f"处理第 {i+1} 条记录失败: {e}") from e
         
         # 插入剩余的数据
         if len(batch_data) > 0:
@@ -142,7 +142,8 @@ def test_simple_insert(lang: str):
                 import traceback
                 traceback.print_exc()
                 conn.rollback()
-                failed_batches.append((batch_num, batch_start, processed_count, str(e)))
+                # 失败时直接抛出异常
+                raise RuntimeError(f"批量插入剩余数据失败: {e}") from e
         
         print(f"处理完成：共处理 {processed_count} 条数据，成功插入 {inserted_count} 条记录")
         
@@ -151,13 +152,6 @@ def test_simple_insert(lang: str):
         del corpus_stream
         import gc
         gc.collect()
-    
-    # 打印失败批次信息
-    if failed_batches:
-        print(f"\n⚠️  共有 {len(failed_batches)} 个批次插入失败:")
-        for batch_num, start, end, error in failed_batches:
-            print(f"  批次 {batch_num} ({start}-{end}): {error}")
-    
     
     # 最终提交（虽然每批次已提交，但确保所有数据都已提交）
     conn.commit()
@@ -185,8 +179,6 @@ def test_simple_insert(lang: str):
     if count < test_count:
         print(f"\n⚠️  注意：实际插入 {count} 条，少于目标 {test_count} 条")
         print(f"   完成度: {count*100//test_count}%")
-        if failed_batches:
-            print(f"   失败批次数: {len(failed_batches)}")
     
     # cursor.execute(f"SELECT id, base_id, docid_col, fulltext_col FROM {table_name} LIMIT 5")
     # records = cursor.fetchall()
