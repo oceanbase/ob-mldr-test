@@ -1,0 +1,36 @@
+# MLDR 测试框架配置文件
+# 
+# 使用说明:
+# 1. 复制此文件为 config.yaml
+# 2. 根据实际环境修改配置
+# 3. 运行脚本时使用 --config config.yaml 参数
+
+# ============================================
+# OceanBase 数据库配置
+# ============================================
+oceanbase:
+  # 数据库连接信息
+  host: 127.0.0.1                # 数据库主机地址
+  port: 2881                      # 数据库端口
+  user: root                      # 数据库用户名
+  password: ""                    # 数据库密码（生产环境请使用强密码）
+  database: test                  # 数据库名
+  charset: utf8mb4                # 字符集
+  autocommit: true                # 是否自动提交
+  
+  # 数据插入配置（仅用于数据插入脚本）
+  insert:
+    batch_size: 1000              # 批量插入大小
+    enable_streaming: true        # 是否启用流式加载
+    read_timeout: 3600             # 插入时的读取超时
+    write_timeout: 3600            # 插入时的写入超时
+    autocommit: false             # 插入时是否自动提交
+    
+    # 向量生成配置（当查询类型需要向量时使用）
+    vector_batch_size: 32         # 向量生成批次大小
+    use_fp16: true                # 是否使用 FP16 精度
+
+embedding:
+  # 向量下载配置
+  download_vectors: true           # 是否从网上下载预生成的向量文件，不开启则本地生成
+  vector_download_url: ""          # 向量文件下载URL

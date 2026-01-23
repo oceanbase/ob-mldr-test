@@ -1,0 +1,14 @@
+# Python
+.venv
+__pycache__
+
+# HuggingFace 模型缓存
+.hf_cache
+
+# 测试结果和临时文件
+query-results
+corpus-embedding
+
+# 配置文件（可能包含敏感信息）
+config.yaml
+config.*.yaml
