@@ -35,4 +35,4 @@ embedding:
   download_vectors: true           # 是否从网上下载预生成的向量文件，不开启则本地生成
   # AWS链接: https://obportal.s3.ap-southeast-1.amazonaws.com/download-center/opensource/bge-m3
   # 注意: 只支持语言为 en
-  vector_download_url: "https://obportal.s3.ap-southeast-1.amazonaws.com/download-center/opensource/bge-m3"  # 向量文件下载URL
+  vector_download_url: "https://obbusiness-private.oss-cn-shanghai.aliyuncs.com/download-center/opensource/bge-m3"  # 向量文件下载URL
