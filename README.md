@@ -145,7 +145,7 @@ python mldr_test_runner.py [OPTIONS]
 
 **Basic parameters:**
 
-| 参数 | 类型 | 默认值 | 说明 |
+| Parameter | Type | Default | Description |
 |------|------|--------|------|
 | `--lang` | str | `en` | Test language (e.g. `en`, `zh`, etc.) |
 | `--backend` | str | `oceanbase` | Database backend (`oceanbase` or `seekdb`) |
