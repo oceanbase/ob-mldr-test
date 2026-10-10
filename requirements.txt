@@ -5,7 +5,7 @@
 FlagEmbedding
 
 # 数据集和数据处理
-datasets==2.19.0
+datasets==5.0.1
 numpy
 tqdm
 
